@@ -1,76 +1,90 @@
 from entrez import entrez as ez
 import GEOparse
-import logging
-import pprint
-logging.basicConfig(filename="main.log", level=logging.INFO)
+import pandas as pd
+import tqdm
+import time
+from pathlib import Path
 
-# GEO is in Entrez GEO DataSets (db=gds)
-def main():
-    """
-    Idea:
-    1. Get list of GSEs to for-loop
+def get_characteristic(gsm, dei_aspect):
+    for key, value in gsm.metadata.items():
+        if key.startswith("characteristic"):
+            for entry in value:
+                if dei_aspect in entry.lower():
+                    dei_value = entry.split(": ")[1]
+                    return dei_value.lower()
 
-    2. For each gse, for loop through `gse.gsms.items()`
-    3. For each gsm, for loop through key-value pairs in `gsm.metadata`
-    4. Read gsm.column data
-    """
-    gse = GEOparse.get_GEO(geo="GSE1563", destdir="./", silent=True)
+def analyze_dei(geo_accession_numbers):
+    # Analyzing a Series
+    dei_path = Path("./dei.csv")
+    dei_aspects = ["sex", "race", "ethnicity", "age"]
 
-    logging.info("GSM example:")
-    for gsm_name, gsm in gse.gsms.items():
-        logging.info(f"Name: {gsm_name}")
-        logging.info("Metadata:")
-        for key, value in gsm.metadata.items():
-            """
-            gsm.metadata["description"]
-            ['Clinical status: con...lood donor', 'Age: unknown', 'Sex: unknown', 'Immunosupression: none', 'Histopathology: none', 'Donor type: NA', 'Scr (mg/dL): unknown', 'Days post transplant: NA', 'Abbreviations used i...osclerosis', 'Keywords = DNA micro...transplant']
-            """
-            logging.info(f" - {key} : {', '.join(value)}")
-        logging.info("Table data: ")
-        logging.info(gsm.table.head())
-        logging.info(gsm.columns.head())
+    for gsm_id in tqdm.tqdm(geo_accession_numbers):
+        if dei_path.is_file():
+            dei_df = pd.read_csv(dei_path)
+        else:
+            dei_df= pd.DataFrame()
 
-# query = ((human[Organism]) AND "expression profiling by high throughput sequencing"[DataSet Type])
-# Use the qualifier fields in Entrez GEO DataSets to fine-tune a search
-# Construct the appropriate eSearch query in your script/program
-# Run the query, retrieve the results in the form of UIDs or history parameters (query_key and WebEnv) as needed
-# Run eSummary or eFetch and/or eLink depending on your needs to retrieve the final metadata or accessions.
-# If you need to download full records or supplVementary files, use the accession information to construct an FTP URL and download the data.
-def sample_query():
-    query = '((human[Organism]) AND "expression profiling by high throughput sequencing"[DataSet Type])'
-    entrez_record_uids = []
-    for line in ez.equery(tool="search", db="gds", term=query, usehistory="y"):
-        if line.strip().startswith('<Id>'):  # like:  <Id>6714</Id>
-            entrez_record_uids.append(line.split('>')[1].split('<')[0])
-    pprint.pprint(entrez_record_uids)
-    return entrez_record_uids
+        # When reanalyzing, skip the ones that are already in dei_df dataframe
+        gsm_id = gsm_id.strip("\n")
+        if gsm_id in dei_df["gse_id"].tolist():
+            continue
 
-if __name__ == "__main__":
-    # main()
-    """
-    uids = sample_query()
-    elems = ez.eselect(tool="post", db="gds", id=uids)
-    test = ez.eapply(tool="summary", db="gds", elems=elems)
-    for i, line in enumerate(test):
-        print(line)
-    """
+        try:
+            gse = GEOparse.get_GEO(geo=gsm_id, destdir=f"./data", silent=True)
+        except:
+            print(f"{gsm_id} is not a valid GEO Accession number.")
+            continue
 
-    query = '((human[Organism]) AND "expression profiling by high throughput sequencing"[DataSet Type])'
+        # Analyzing Samples within Series
+        for gsm_name, gsm in gse.gsms.items():
+            results_dict = {}
+            results_dict["gse_id"] = gse.name
+            results_dict["gsm_id"] = gsm_name
+            results_dict["contact_country"] = gsm.metadata["contact_country"]
+            if results_dict["contact_country"] == "USA":
+                results_dict["contact_state"] = gsm.metadata["contact_state"]
+            results_dict["submission_date"] = gsm.metadata["submission_date"]
+            for dei_aspect in dei_aspects:
+                results_dict[dei_aspect] = get_characteristic(gsm, dei_aspect=dei_aspect)
+            dei_df = pd.concat([dei_df, pd.DataFrame([results_dict])])
+
+        dei_df.to_csv("dei.csv", index=False)
+
+def _get_geo_accession_numbers(query):
     elems = ez.eselect(tool="search", db="gds", term=query)
     num_samples = int(elems["Count"])
+    print(f"There are {num_samples} samples...")
 
-    accession_ids = []
     # For loops through chunks:
-    chunk_size = 10
-    for i in range(0, num_samples, chunk_size):
+    chunk_size = 10 # 10 queries per second with valid NCBI API key
+    for i in tqdm.tqdm(range(0, num_samples, chunk_size)):
         records = ez.equery(tool="summary", db="gds", WebEnv=elems['WebEnv'], query_key=elems['QueryKey'], retstart=i, retmax=chunk_size)
 
         # Collect Accession Number
         for line in records:
-            if line.strip().startswith('<Item Name="Accession" Type="String">'):
+            if line.strip().startswith('<Item Name="Accession" Type="String">GSE'):
                 accession_id = line.split('>')[1].split('<')[0]
-                accession_ids.append(accession_id)
-                break
-        break
-    # elems = ez.eselect(tool="link", dbfrom="gds", db="gds", id=uids)
-    print(accession_ids)
+                with open('./geo_accession_numbers.txt', 'a') as f:
+                    f.write(f"{accession_id}\n")
+
+        time.sleep(1)
+
+def get_geo_accession_numbers(query):
+    accession_numbers = []
+    try:
+        with open("./geo_accession_numbers.txt") as f:
+            print("File exists...")
+            accession_numbers = f.readlines()
+    except IOError:
+        accession_numbers = _get_geo_accession_numbers(query)
+
+    return accession_numbers
+
+def main():
+    # Get GEO Accession Numbers
+    query = '"homo sapeins"[Organism] AND ("gse"[Filter] AND "Expression profiling by array"[Filter] AND ("100"[n_samples] : "100000000"[n_samples]))'
+    geo_accession_numbers = get_geo_accession_numbers(query)
+    analyze_dei(geo_accession_numbers)
+
+if __name__ == "__main__":
+    main()
