@@ -10,20 +10,23 @@ def get_characteristic(gsm, dei_aspect):
         if key.startswith("characteristic"):
             for entry in value:
                 if dei_aspect in entry.lower():
-                    dei_value = entry.split(": ")[1]
-                    return dei_value.lower()
+                    try:
+                        dei_value = entry.split(": ")[1]
+                        return dei_value.lower()
+                    except:
+                        continue
+
 
 def analyze_dei(geo_accession_numbers):
     # Analyzing a Series
     dei_path = Path("./dei.csv")
     dei_aspects = ["sex", "race", "ethnicity", "age"]
+    if dei_path.is_file():
+        dei_df = pd.read_csv(dei_path)
+    else:
+        dei_df= pd.DataFrame()
 
     for gsm_id in tqdm.tqdm(geo_accession_numbers):
-        if dei_path.is_file():
-            dei_df = pd.read_csv(dei_path)
-        else:
-            dei_df= pd.DataFrame()
-
         # When reanalyzing, skip the ones that are already in dei_df dataframe
         gsm_id = gsm_id.strip("\n")
         if gsm_id in dei_df["gse_id"].tolist():
@@ -82,7 +85,7 @@ def get_geo_accession_numbers(query):
 
 def main():
     # Get GEO Accession Numbers
-    query = '"homo sapeins"[Organism] AND ("gse"[Filter] AND "Expression profiling by array"[Filter] AND ("100"[n_samples] : "100000000"[n_samples]))'
+    query = '"homo sapiens"[Organism] AND ("gse"[Filter] AND "Expression profiling by array"[Filter] AND ("100"[n_samples] : "100000000"[n_samples]))'
     geo_accession_numbers = get_geo_accession_numbers(query)
     analyze_dei(geo_accession_numbers)
 

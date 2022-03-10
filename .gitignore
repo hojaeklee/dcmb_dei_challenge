@@ -1,0 +1,7 @@
+data/
+entrez/
+notebooks
+.vscode/
+.ipynb_checkpoints/
+
+*.out
